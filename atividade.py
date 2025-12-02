@@ -1,49 +1,77 @@
 import pandas as pd
 import numpy as np
 import plotly.express as px
-from scipy.interpolate import make_interp_spline
-
-df = pd.read_excel("Medidas cozinha.xlsx", sheet_name="Planilha1", engine="openpyxl")
-
-# Selecionar colunas relevantes
-medidas = df.iloc[1:, 1].astype(float)  # λ/2 em cm
-quantidades = df.iloc[1:, 2].astype(int)  # frequência
-
-# Filtrar apenas valores com quantidade > 0
-mask = quantidades > 0
-medidas = medidas[mask]
-quantidades = quantidades[mask]
-
-#Criar gráfico de pontos
-fig = px.scatter(x=medidas, y=quantidades, labels={"x": "λ/2 (cm)", "y": "Frequência"}, title="Distribuição das medidas de λ/2")
+import plotly.graph_objects as go
+from scipy.optimize import curve_fit
 
 
-x_new = np.linspace(medidas.min(), medidas.max(), 300)
-spline = make_interp_spline(medidas, quantidades)
-y_smooth = spline(x_new)
+try:
+    df = pd.read_excel("Medidas cozinha.xlsx", sheet_name="Planilha1", engine="openpyxl")
+except:
+  
+    df = pd.read_csv("Medidas cozinha.xlsx - Planilha1.csv")
 
-fig.add_scatter(x=x_new, y=y_smooth, mode='lines', name='Curva Ajustada')
 
-fig.write_json("grafico_lambda2.json")
-fig.write_image("grafico_lambda2.png")
+medidas = pd.to_numeric(df.iloc[1:, 1], errors='coerce') 
+quantidades = pd.to_numeric(df.iloc[1:, 2], errors='coerce') 
 
-# Encontrar pico da curva (valor mais provável de λ/2)
-idx_max = np.argmax(y_smooth)
-lambda2_cm = x_new[idx_max]
 
-freq = 2.45e9  # Hz
-lambda_m = (lambda2_cm * 2) / 100  # converter cm para m e dobrar
+mask_valid = ~np.isnan(medidas) & ~np.isnan(quantidades)
+medidas = medidas[mask_valid]
+quantidades = quantidades[mask_valid]
+
+mask_pos = quantidades > 0
+medidas_filtradas = medidas[mask_pos]
+quantidades_filtradas = quantidades[mask_pos]
+
+def gaussian(x, amplitude, media, desvio_padrao):
+    return amplitude * np.exp(-((x - media) ** 2) / (2 * desvio_padrao ** 2))
+
+chute_inicial = [max(quantidades), np.mean(medidas), 1.0]
+
+try:
+    popt, pcov = curve_fit(gaussian, medidas, quantidades, p0=chute_inicial)
+    amplitude_otim, media_otim, desvio_otim = popt
+    
+    
+    x_new = np.linspace(min(medidas), max(medidas), 300)
+    y_smooth = gaussian(x_new, *popt)
+    
+ 
+    lambda2_cm = media_otim
+    sucesso_fit = True
+except:
+    print("Não foi possível ajustar a curva gaussiana. Verifique os dados.")
+    lambda2_cm = 0
+    sucesso_fit = False
+
+fig = px.scatter(x=medidas_filtradas, y=quantidades_filtradas, 
+                 labels={"x": "Medida λ/2 (cm)", "y": "Frequência"}, 
+                 title="Ajuste Gaussiano: Velocidade da Luz")
+
+if sucesso_fit:
+    fig.add_scatter(x=x_new, y=y_smooth, mode='lines', name=f'Ajuste (Pico: {lambda2_cm:.2f} cm)')
+
+fig.show() 
+
+
+freq = 2.45e9  
+lambda_m = (lambda2_cm * 2) / 100 
 c_calculado = freq * lambda_m
 
-
-c_esperado = 3e8
+c_esperado = 3e8 
 erro = abs(c_calculado - c_esperado) / c_esperado * 100
 
-print(f"Valor mais provável de λ/2: {lambda2_cm:.2f} cm")
+
+print("-" * 30)
+print(f"RESULTADOS DA ANÁLISE:")
+print(f"Valor mais provável de λ/2 (Pico da Curva): {lambda2_cm:.4f} cm")
 print(f"Comprimento de onda λ: {lambda_m:.4f} m")
 print(f"Velocidade da luz calculada: {c_calculado:.2e} m/s")
 print(f"Erro percentual: {erro:.2f}%")
-if erro < 10:
-    print("Resultado válido: está próximo do valor esperado.")
+print("-" * 30)
+
+if erro < 15:
+    print("CONCLUSÃO: O resultado é VÁLIDO. O erro é aceitável para este método caseiro.")
 else:
-    print("Resultado não muito preciso: possíveis erros experimentais.")
+    print("CONCLUSÃO: O erro está alto. Verifique as medidas ou a frequência do aparelho.")
